@@ -4,131 +4,146 @@ from typing import Dict, List, Tuple, Any
 from rapidfuzz import fuzz, process
 from datetime import datetime
 
-class DataCleaner:
+class LimpadorDados:
     def __init__(self):
-        self.cleaning_report = {}
+        self.relatorio_limpeza = {}
         
-    def to_title_case_br(self, text: str) -> str:
-        if pd.isna(text) or not isinstance(text, str):
-            return text
-        small_words = {'de', 'da', 'do', 'das', 'dos', 'e', 'em', 'para', 'com'}
-        words = text.split()
-        title_words = []
-        for i, word in enumerate(words):
-            if i == 0 or word.lower() not in small_words:
-                if len(word) > 1:
-                    title_words.append(word[0].upper() + word[1:].lower())
+    def para_titulo_br(self, texto: str) -> str:
+        """Converte strings para Title Case (iniciais maiúsculas), respeitando preposições pt-BR."""
+        if pd.isna(texto) or not isinstance(texto, str):
+            return texto
+        palavras_pequenas = {'de', 'da', 'do', 'das', 'dos', 'e', 'em', 'para', 'com'}
+        palavras = texto.split()
+        palavras_titulo = []
+        for i, palavra in enumerate(palavras):
+            if i == 0 or palavra.lower() not in palavras_pequenas:
+                if len(palavra) > 1:
+                    palavras_titulo.append(palavra[0].upper() + palavra[1:].lower())
                 else:
-                    title_words.append(word.upper())
+                    palavras_titulo.append(palavra.upper())
             else:
-                title_words.append(word.lower())
-        return ' '.join(title_words)
+                palavras_titulo.append(palavra.lower())
+        return ' '.join(palavras_titulo)
         
-    def standardize_date(self, date_str: Any) -> Any:
-        if pd.isna(date_str):
-            return date_str
-        str_date = str(date_str).strip()
-        if not str_date:
+    def padronizar_data(self, data_str: Any) -> Any:
+        """Tenta converter diversos formatos de data para o padrão dd/mm/aaaa."""
+        if pd.isna(data_str):
+            return data_str
+        str_data = str(data_str).strip()
+        if not str_data:
             return np.nan
         try:
-            date_obj = pd.to_datetime(str_date, dayfirst=True, errors='coerce')
-            if pd.isna(date_obj):
+            obj_data = pd.to_datetime(str_data, dayfirst=True, errors='coerce')
+            if pd.isna(obj_data):
                 return np.nan
-            return date_obj.strftime('%d/%m/%Y')
+            return obj_data.strftime('%d/%m/%Y')
         except Exception:
             return np.nan
             
-    def detect_frequent_values(self, series: pd.Series, threshold: float = 0.05) -> Tuple[List[Any], List[Any]]:
-        value_counts = series.value_counts()
-        total_non_null = len(series.dropna())
-        if total_non_null == 0:
+    def detectar_valores_frequentes(self, serie: pd.Series, limiar: float = 0.05) -> Tuple[List[Any], List[Any]]:
+        """Separa valores muito comuns (corretos) de valores raros (possíveis erros)."""
+        contagem_valores = serie.value_counts()
+        total_nao_nulos = len(serie.dropna())
+        if total_nao_nulos == 0:
             return [], []
-        frequent_values = []
-        rare_values = []
-        for value, count in value_counts.items():
-            frequency = count / total_non_null
-            if frequency >= threshold:
-                frequent_values.append(value)
+        valores_frequentes = []
+        valores_raros = []
+        for valor, contagem in contagem_valores.items():
+            frequencia = contagem / total_nao_nulos
+            if frequencia >= limiar:
+                valores_frequentes.append(valor)
             else:
-                rare_values.append(value)
-        return frequent_values, rare_values
+                valores_raros.append(valor)
+        return valores_frequentes, valores_raros
         
-    def fuzzy_correction(self, series: pd.Series, similarity_threshold: float = 85) -> Tuple[pd.Series, Dict[str, Any]]:
-        if series.dtype != 'object':
-            return series, {}
-        series_clean = series.copy()
-        frequent_values, rare_values = self.detect_frequent_values(series_clean)
-        if not frequent_values or not rare_values:
-            return series_clean, {}
-        corrections = {}
-        rows_corrected = 0
-        rows_removed = 0
-        for rare_value in rare_values:
-            if pd.isna(rare_value):
+    def correcao_fuzzy(self, serie: pd.Series, limiar_similaridade: float = 85) -> Tuple[pd.Series, Dict[str, Any]]:
+        """Corrige erros de digitação comparando valores raros com valores frequentes."""
+        if serie.dtype != 'object':
+            return serie, {}
+        serie_limpa = serie.copy()
+        valores_frequentes, valores_raros = self.detectar_valores_frequentes(serie_limpa)
+        if not valores_frequentes or not valores_raros:
+            return serie_limpa, {}
+            
+        correcoes = {}
+        linhas_corrigidas = 0
+        linhas_removidas = 0
+        
+        for valor_raro in valores_raros:
+            if pd.isna(valor_raro):
                 continue
-            best_match, score, _ = process.extractOne(
-                str(rare_value), 
-                [str(fv) for fv in frequent_values], 
+            melhor_match, pontuacao, _ = process.extractOne(
+                str(valor_raro), 
+                [str(vf) for vf in valores_frequentes], 
                 scorer=fuzz.token_sort_ratio
             )
-            if score >= similarity_threshold:
-                original_freq_value = frequent_values[[str(fv) for fv in frequent_values].index(best_match)]
-                mask = series_clean == rare_value
-                series_clean[mask] = original_freq_value
-                corrections[str(rare_value)] = str(original_freq_value)
-                rows_corrected += mask.sum()
+            if pontuacao >= limiar_similaridade:
+                valor_freq_original = valores_frequentes[[str(vf) for vf in valores_frequentes].index(melhor_match)]
+                mascara = serie_limpa == valor_raro
+                serie_limpa[mascara] = valor_freq_original
+                correcoes[str(valor_raro)] = str(valor_freq_original)
+                linhas_corrigidas += mascara.sum()
             else:
-                mask = series_clean == rare_value
-                series_clean[mask] = np.nan
-                rows_removed += mask.sum()
-        stats = {
-            'rows_corrected': rows_corrected,
-            'rows_removed': rows_removed,
-            'corrections_made': corrections
+                # Se não for similar o suficiente, considera ruído e remove
+                mascara = serie_limpa == valor_raro
+                serie_limpa[mascara] = np.nan
+                linhas_removidas += mascara.sum()
+                
+        estatisticas = {
+            'linhas_corrigidas': linhas_corrigidas,
+            'linhas_removidas': linhas_removidas,
+            'correcoes_feitas': correcoes
         }
-        return series_clean, stats
+        return serie_limpa, estatisticas
         
-    def clean_column(self, series: pd.Series, column_type: str, column_name: str, similarity_threshold: float = 85) -> Tuple[pd.Series, Dict[str, Any]]:
-        cleaning_stats = {
-            'original_non_null': series.notna().sum(),
-            'rows_corrected': 0,
-            'rows_removed': 0,
-            'dates_formatted': 0
+    def limpar_coluna(self, serie: pd.Series, tipo_coluna: str, nome_coluna: str, limiar_similaridade: float = 85) -> Tuple[pd.Series, Dict[str, Any]]:
+        """Aplica regras de limpeza específicas baseadas no tipo semântico da coluna."""
+        stats_limpeza = {
+            'original_nao_nulos': serie.notna().sum(),
+            'linhas_corrigidas': 0,
+            'linhas_removidas': 0,
+            'datas_formatadas': 0
         }
-        cleaned_series = series.copy()
-        if column_type in ['TEXTO_LIVRE', 'CATEGORICO_NOMINAL']:
-            text_mask = cleaned_series.notna() & (cleaned_series.astype(str).str.strip() != '')
-            cleaned_series[text_mask] = cleaned_series[text_mask].apply(self.to_title_case_br)
-            cleaned_series, fuzzy_stats = self.fuzzy_correction(cleaned_series, similarity_threshold)
-            cleaning_stats.update(fuzzy_stats)
-        elif column_type == 'DATA_HORA':
-            date_mask = cleaned_series.notna()
-            cleaned_series[date_mask] = cleaned_series[date_mask].apply(self.standardize_date)
-            cleaning_stats['dates_formatted'] = date_mask.sum()
-            new_null_count = cleaned_series.isna().sum()
-            original_null_count = series.isna().sum()
-            cleaning_stats['rows_removed'] += (new_null_count - original_null_count)
-        cleaning_stats['final_non_null'] = cleaned_series.notna().sum()
-        return cleaned_series, cleaning_stats
+        serie_limpa = serie.copy()
         
-    def clean_dataset(self, df: pd.DataFrame, type_predictions: Dict[str, str], similarity_threshold: float = 85) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        cleaned_df = df.copy()
-        overall_report = {
-            'columns_cleaned': {},
-            'total_rows_corrected': 0,
-            'total_rows_removed': 0,
-            'total_dates_formatted': 0
+        if tipo_coluna in ['TEXTO_LIVRE', 'CATEGORICO_NOMINAL']:
+            mascara_texto = serie_limpa.notna() & (serie_limpa.astype(str).str.strip() != '')
+            serie_limpa[mascara_texto] = serie_limpa[mascara_texto].apply(self.para_titulo_br)
+            serie_limpa, stats_fuzzy = self.correcao_fuzzy(serie_limpa, limiar_similaridade)
+            stats_limpeza.update(stats_fuzzy)
+            
+        elif tipo_coluna == 'DATA_HORA':
+            mascara_data = serie_limpa.notna()
+            serie_limpa[mascara_data] = serie_limpa[mascara_data].apply(self.padronizar_data)
+            stats_limpeza['datas_formatadas'] = mascara_data.sum()
+            
+            nova_contagem_nulos = serie_limpa.isna().sum()
+            contagem_nulos_original = serie.isna().sum()
+            stats_limpeza['linhas_removidas'] += (nova_contagem_nulos - contagem_nulos_original)
+            
+        stats_limpeza['final_nao_nulos'] = serie_limpa.notna().sum()
+        return serie_limpa, stats_limpeza
+        
+    def limpar_dataset(self, df: pd.DataFrame, previsoes_tipo: Dict[str, str], limiar_similaridade: float = 85) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """Itera sobre todas as colunas do DataFrame e aplica a limpeza."""
+        df_limpo = df.copy()
+        relatorio_geral = {
+            'colunas_limpas': {},
+            'total_linhas_corrigidas': 0,
+            'total_linhas_removidas': 0,
+            'total_datas_formatadas': 0
         }
-        for column in df.columns:
-            if column in type_predictions:
-                column_type = type_predictions[column]
-                cleaned_series, col_stats = self.clean_column(
-                    df[column], column_type, column, similarity_threshold
+        for coluna in df.columns:
+            if coluna in previsoes_tipo:
+                tipo_coluna = previsoes_tipo[coluna]
+                serie_limpa, stats_col = self.limpar_coluna(
+                    df[coluna], tipo_coluna, coluna, limiar_similaridade
                 )
-                cleaned_df[column] = cleaned_series
-                overall_report['columns_cleaned'][column] = col_stats
-                overall_report['total_rows_corrected'] += col_stats.get('rows_corrected', 0)
-                overall_report['total_rows_removed'] += col_stats.get('rows_removed', 0)
-                overall_report['total_dates_formatted'] += col_stats.get('dates_formatted', 0)
-        self.cleaning_report = overall_report
-        return cleaned_df, overall_report
+                df_limpo[coluna] = serie_limpa
+                relatorio_geral['colunas_limpas'][coluna] = stats_col
+                relatorio_geral['total_linhas_corrigidas'] += stats_col.get('linhas_corrigidas', 0)
+                relatorio_geral['total_linhas_removidas'] += stats_col.get('linhas_removidas', 0)
+                relatorio_geral['total_datas_formatadas'] += stats_col.get('datas_formatadas', 0)
+                
+        self.relatorio_limpeza = relatorio_geral
+        return df_limpo, relatorio_geral

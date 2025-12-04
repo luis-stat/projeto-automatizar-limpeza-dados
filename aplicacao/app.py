@@ -9,111 +9,122 @@ from datetime import datetime
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from data_loader import DataLoader
-from feature_extractor import MetaFeatureExtractor
-from cleaner import DataCleaner
+# Importações atualizadas com os nomes em português
+from data_loader import CarregadorDados
+from feature_extractor import ExtratorMetaCaracteristicas
+from cleaner import LimpadorDados
 
-class SemanticTypeInferenceApp:
+class AplicacaoInferenciaTipoSemantico:
     def __init__(self):
-        self.data_loader = DataLoader()
-        self.feature_extractor = MetaFeatureExtractor()
-        self.cleaner = DataCleaner()
-        self.model = None
-        self.label_encoder = None
-        self.feature_columns = []
-        self.load_model()
+        self.carregador = CarregadorDados()
+        self.extrator = ExtratorMetaCaracteristicas()
+        self.limpador = LimpadorDados()
+        self.modelo = None
+        self.codificador_labels = None
+        self.colunas_features = []
+        self.carregar_modelo()
         
-    def load_model(self):
+    def carregar_modelo(self):
+        """Carrega o modelo de ML treinado e seus artefatos (encoder, colunas)."""
         try:
-            model_path = os.path.join(
+            caminho_modelo = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 'modelos_salvos',
                 'semantic_type_classifier.pkl'
             )
-            with open(model_path, 'rb') as f:
-                model_data = pickle.load(f)
-            self.model = model_data['model']
-            self.label_encoder = model_data['label_encoder']
-            self.feature_columns = model_data.get('feature_columns', [])
+            with open(caminho_modelo, 'rb') as f:
+                dados_modelo = pickle.load(f)
+            self.modelo = dados_modelo['model']
+            self.codificador_labels = dados_modelo['label_encoder']
+            self.colunas_features = dados_modelo.get('feature_columns', [])
         except Exception as e:
             st.error(f"Erro ao carregar o modelo: {e}")
             st.stop()
 
-    def save_feedback(self, column_name, predicted_type, correct_type, file_name):
-        feedback_file = os.path.join(
+    def salvar_feedback(self, nome_coluna, tipo_predito, tipo_correto, nome_arquivo):
+        """Registra correções do usuário em um CSV para re-treinamento futuro."""
+        arquivo_feedback = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             'dados_para_treinamento',
             'feedback_loop.csv'
         )
-        file_exists = os.path.isfile(feedback_file)
-        with open(feedback_file, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            if not file_exists:
-                writer.writerow(['data_feedback', 'nome_arquivo', 'nome_coluna', 'tipo_predito', 'tipo_correto'])
-            writer.writerow([datetime.now().strftime('%Y-%m-%d %H:%M:%S'), file_name, column_name, predicted_type, correct_type])
+        arquivo_existe = os.path.isfile(arquivo_feedback)
+        with open(arquivo_feedback, 'a', newline='', encoding='utf-8') as f:
+            escritor = csv.writer(f)
+            if not arquivo_existe:
+                escritor.writerow(['data_feedback', 'nome_arquivo', 'nome_coluna', 'tipo_predito', 'tipo_correto'])
+            escritor.writerow([datetime.now().strftime('%Y-%m-%d %H:%M:%S'), nome_arquivo, nome_coluna, tipo_predito, tipo_correto])
             
-    def predict_column_types(self, df: pd.DataFrame) -> dict:
-        predictions = {}
-        feature_list = []
-        column_names = []
-        for column in df.columns:
-            features = self.feature_extractor.extract_features(df[column], column)
-            feature_list.append(features)
-            column_names.append(column)
-        features_df = pd.DataFrame(feature_list)
-        features_df = features_df.fillna(0)
+    def prever_tipos_colunas(self, df: pd.DataFrame) -> dict:
+        """Gera features para o DataFrame e utiliza o modelo para prever tipos semânticos."""
+        predicoes = {}
+        lista_features = []
+        nomes_colunas = []
         
-        missing_cols = set(self.feature_columns) - set(features_df.columns)
-        for c in missing_cols:
-            features_df[c] = 0
-        features_df = features_df[self.feature_columns]
+        for coluna in df.columns:
+            feats = self.extrator.extrair_caracteristicas(df[coluna], coluna)
+            lista_features.append(feats)
+            nomes_colunas.append(coluna)
+            
+        df_features = pd.DataFrame(lista_features)
+        df_features = df_features.fillna(0)
+        
+        # Garante que todas as colunas esperadas pelo modelo existam
+        cols_faltantes = set(self.colunas_features) - set(df_features.columns)
+        for c in cols_faltantes:
+            df_features[c] = 0
+        df_features = df_features[self.colunas_features]
         
         try:
-            predictions_encoded = self.model.predict(features_df)
-            predicted_types = self.label_encoder.inverse_transform(predictions_encoded)
-            for col_name, pred_type in zip(column_names, predicted_types):
-                predictions[col_name] = pred_type
+            predicoes_codificadas = self.modelo.predict(df_features)
+            tipos_preditos = self.codificador_labels.inverse_transform(predicoes_codificadas)
+            for nome_col, tipo_pred in zip(nomes_colunas, tipos_preditos):
+                predicoes[nome_col] = tipo_pred
         except Exception as e:
             st.error(f"Erro durante a predição: {e}")
-            for col_name in column_names:
-                predictions[col_name] = 'DESCONHECIDO'
-        return predictions
+            for nome_col in nomes_colunas:
+                predicoes[nome_col] = 'DESCONHECIDO'
+        return predicoes
         
-    def run(self):
+    def executar(self):
+        """Função principal que renderiza a interface Streamlit."""
         st.set_page_config(page_title="Inferência Semântica", layout="wide")
         st.title("Sistema de Inferência e Limpeza de Dados")
         
         with st.sidebar:
             st.header("Configurações de Limpeza")
-            fuzzy_threshold = st.slider(
+            limiar_fuzzy = st.slider(
                 "Sensibilidade da Correção (Fuzzy)", 
                 min_value=50, max_value=100, value=85,
                 help="Valores maiores exigem mais similaridade para corrigir erros de digitação."
             )
             st.markdown("---")
-            st.header("Feedback Loop")
+            st.header("Ciclo de Feedback")
             st.info("Suas correções manuais serão salvas para re-treinar o modelo futuramente.")
 
-        uploaded_file = st.file_uploader("Carregue seu arquivo CSV", type=['csv'])
+        arquivo_upload = st.file_uploader("Carregue seu arquivo CSV", type=['csv'])
         
-        if uploaded_file is not None:
-            if 'df_raw' not in st.session_state or st.session_state.get('uploaded_filename') != uploaded_file.name:
+        if arquivo_upload is not None:
+            # Lógica de cache para não recarregar/reprocessar a cada interação da UI
+            if 'df_raw' not in st.session_state or st.session_state.get('nome_arquivo_upload') != arquivo_upload.name:
                 try:
                     with st.spinner("Carregando arquivo..."):
-                        temp_path = f"temp_{uploaded_file.name}"
-                        with open(temp_path, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-                        df, separator, encoding = self.data_loader.load_data(temp_path)
-                        os.remove(temp_path)
+                        caminho_temp = f"temp_{arquivo_upload.name}"
+                        with open(caminho_temp, "wb") as f:
+                            f.write(arquivo_upload.getbuffer())
+                            
+                        df, separador, codificacao = self.carregador.carregar_dados(caminho_temp)
+                        os.remove(caminho_temp)
+                        
                         st.session_state['df_raw'] = df
-                        st.session_state['uploaded_filename'] = uploaded_file.name
-                        st.session_state['type_predictions'] = self.predict_column_types(df)
+                        st.session_state['nome_arquivo_upload'] = arquivo_upload.name
+                        st.session_state['previsoes_tipo'] = self.prever_tipos_colunas(df)
                 except Exception as e:
                     st.error(f"Erro: {e}")
                     return
             
             df = st.session_state['df_raw']
-            type_predictions = st.session_state['type_predictions']
+            previsoes_tipo = st.session_state['previsoes_tipo']
             
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -121,45 +132,47 @@ class SemanticTypeInferenceApp:
                 st.dataframe(df.head(), use_container_width=True)
             with col2:
                 st.subheader("Tipos Identificados")
-                corrections = {}
+                correcoes = {}
                 for col in df.columns:
-                    pred = type_predictions.get(col, 'DESCONHECIDO')
-                    possible_types = list(self.label_encoder.classes_) if self.label_encoder else [pred]
-                    new_type = st.selectbox(
+                    pred = previsoes_tipo.get(col, 'DESCONHECIDO')
+                    tipos_possiveis = list(self.codificador_labels.classes_) if self.codificador_labels else [pred]
+                    
+                    novo_tipo = st.selectbox(
                         f"{col}", 
-                        options=possible_types, 
-                        index=possible_types.index(pred) if pred in possible_types else 0,
+                        options=tipos_possiveis, 
+                        index=tipos_possiveis.index(pred) if pred in tipos_possiveis else 0,
                         key=f"sel_{col}"
                     )
-                    if new_type != pred:
-                        corrections[col] = (pred, new_type)
-                        type_predictions[col] = new_type
+                    
+                    if novo_tipo != pred:
+                        correcoes[col] = (pred, novo_tipo)
+                        previsoes_tipo[col] = novo_tipo
 
-                if corrections:
+                if correcoes:
                     if st.button("Salvar Feedback de Tipos"):
-                        for col, (old, new) in corrections.items():
-                            self.save_feedback(col, old, new, uploaded_file.name)
+                        for col, (antigo, novo) in correcoes.items():
+                            self.salvar_feedback(col, antigo, novo, arquivo_upload.name)
                         st.success("Feedback salvo com sucesso!")
 
             if st.button("Executar Limpeza", type="primary"):
                 with st.spinner("Limpando dados..."):
-                    cleaned_df, report = self.cleaner.clean_dataset(df, type_predictions, fuzzy_threshold)
+                    df_limpo, relatorio = self.limpador.limpar_dataset(df, previsoes_tipo, limiar_fuzzy)
                     
                 st.subheader("Resultado da Limpeza")
-                st.dataframe(cleaned_df, use_container_width=True)
+                st.dataframe(df_limpo, use_container_width=True)
                 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Linhas Corrigidas", report['total_rows_corrected'])
-                c2.metric("Linhas Removidas", report['total_rows_removed'])
-                c3.metric("Datas Formatadas", report['total_dates_formatted'])
+                c1.metric("Linhas Corrigidas", relatorio['total_linhas_corrigidas'])
+                c2.metric("Linhas Removidas", relatorio['total_linhas_removidas'])
+                c3.metric("Datas Formatadas", relatorio['total_datas_formatadas'])
                 
                 st.download_button(
                     label="Baixar CSV Limpo",
-                    data=cleaned_df.to_csv(index=False, sep=';'),
-                    file_name="cleaned_dataset.csv",
+                    data=df_limpo.to_csv(index=False, sep=';'),
+                    file_name="dataset_limpo.csv",
                     mime="text/csv"
                 )
 
 if __name__ == "__main__":
-    app = SemanticTypeInferenceApp()
-    app.run()
+    app = AplicacaoInferenciaTipoSemantico()
+    app.executar()

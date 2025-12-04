@@ -4,70 +4,74 @@ import chardet
 from typing import Tuple, Optional
 import warnings
 
-class DataLoader:
+class CarregadorDados:
     @staticmethod
-    def detect_encoding(file_path: str) -> str:
+    def detectar_codificacao(caminho_arquivo: str) -> str:
+        """Detecta a codificação (encoding) do arquivo lendo os primeiros bytes."""
         try:
-            with open(file_path, 'rb') as f:
-                raw_data = f.read(10000)
-                result = chardet.detect(raw_data)
-                encoding = result['encoding'] or 'utf-8'
-                return encoding
+            with open(caminho_arquivo, 'rb') as f:
+                dados_brutos = f.read(10000)
+                resultado = chardet.detect(dados_brutos)
+                codificacao = resultado['encoding'] or 'utf-8'
+                return codificacao
         except Exception:
             return 'utf-8'
             
     @staticmethod
-    def detect_separator(file_path: str, encoding: str) -> str:
+    def detectar_separador(caminho_arquivo: str, codificacao: str) -> str:
+        """Identifica qual caractere separa as colunas."""
         try:
-            with open(file_path, 'r', encoding=encoding) as f:
-                first_line = f.readline()
-                second_line = f.readline()
+            with open(caminho_arquivo, 'r', encoding=codificacao) as f:
+                primeira_linha = f.readline()
+                segunda_linha = f.readline()
                 
-            lines = [first_line, second_line] if second_line else [first_line]
+            linhas = [primeira_linha, segunda_linha] if segunda_linha else [primeira_linha]
             
-            separator_scores = {}
+            pontuacao_separadores = {}
             for sep in [',', ';', '\t', '|']:
-                scores = []
-                for line in lines:
-                    if line.strip():
-                        count = line.count(sep)
-                        scores.append(count)
-                if scores:
-                    separator_scores[sep] = min(scores)
+                pontuacoes = []
+                for linha in linhas:
+                    if linha.strip():
+                        contagem = linha.count(sep)
+                        pontuacoes.append(contagem)
+                if pontuacoes:
+                    pontuacao_separadores[sep] = min(pontuacoes)
                     
-            if separator_scores:
-                best_separator = max(separator_scores, key=separator_scores.get)
-                if separator_scores[best_separator] > 0:
-                    return best_separator
+            if pontuacao_separadores:
+                melhor_separador = max(pontuacao_separadores, key=pontuacao_separadores.get)
+                if pontuacao_separadores[melhor_separador] > 0:
+                    return melhor_separador
                     
             return ','
         except Exception:
             return ','
             
-    def load_data(self, file_path: str) -> Tuple[pd.DataFrame, str, str]:
+    def carregar_dados(self, caminho_arquivo: str) -> Tuple[pd.DataFrame, str, str]:
+        """Carrega o arquivo CSV, detectando automaticamente encoding e separador."""
         try:
-            encoding = self.detect_encoding(file_path)
-            separator = self.detect_separator(file_path, encoding)
+            codificacao = self.detectar_codificacao(caminho_arquivo)
+            separador = self.detectar_separador(caminho_arquivo, codificacao)
             
             df = pd.read_csv(
-                file_path, 
-                sep=separator, 
-                encoding=encoding, 
+                caminho_arquivo, 
+                sep=separador, 
+                encoding=codificacao, 
                 low_memory=False,
                 on_bad_lines='skip'
             )
             
             if df.empty:
-                raise ValueError("Arquivo CSV está vazio")
+                raise ValueError("O arquivo CSV está vazio")
                 
-            return df, separator, encoding
+            return df, separador, codificacao
             
         except UnicodeDecodeError:
             try:
-                df = pd.read_csv(file_path, sep=separator, encoding='latin-1', low_memory=False)
-                return df, separator, 'latin-1'
+                # Tenta fallback para latin-1, caso utf-8 falhe
+                df = pd.read_csv(caminho_arquivo, sep=separador, encoding='latin-1', low_memory=False)
+                return df, separador, 'latin-1'
             except Exception as e:
-                raise ValueError(f"Erro ao ler arquivo com encoding alternativo: {e}")
+                raise ValueError(f"Erro ao ler arquivo com codificação alternativa: {e}")
                 
         except Exception as e:
             raise ValueError(f"Erro ao carregar arquivo: {e}")
