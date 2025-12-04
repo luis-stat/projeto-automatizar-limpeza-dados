@@ -1,80 +1,113 @@
 import pandas as pd
+import numpy as np
 import os
 import sys
+from typing import List, Dict
+import warnings
 
-# Adiciona o diretório 'aplicacao' ao caminho do Python para podermos importar nossos módulos traduzidos
-# O '..' significa "voltar uma pasta" (sair de treinamento_do_modelo e ir para a raiz)
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'aplicacao'))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from aplicacao.feature_extractor import MetaFeatureExtractor
 
-from data_loader import CarregadorDados  # Importando a classe traduzida
-from feature_extractor import ExtratorMetaCaracteristicas  # Importando a classe traduzida
-
-def gerar_features_treinamento():
-    # Caminhos dos diretórios (ajustados automaticamente baseado na localização deste script)
-    caminho_base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    caminho_dados = os.path.join(caminho_base, 'dados_para_treinamento', 'bancos_brutos')
-    caminho_gabarito = os.path.join(caminho_base, 'dados_para_treinamento', 'gabarito_master.csv')
-    caminho_saida = os.path.join(caminho_base, 'dados_para_treinamento', 'training_features.csv')
-
-    # Inicializa nossas ferramentas
-    carregador = CarregadorDados()
-    extrator = ExtratorMetaCaracteristicas()
-
-    # Carrega o gabarito (a "cola" que diz qual é o tipo correto de cada coluna)
-    if not os.path.exists(caminho_gabarito):
-        print("Erro: Arquivo de gabarito não encontrado!")
-        return
-
-    df_gabarito = pd.read_csv(caminho_gabarito)
-    
-    # Treina o extrator com os nomes de colunas que existem no gabarito
-    # Isso ajuda a IA a aprender padrões nos nomes (ex: "dt_nasc" geralmente é data)
-    extrator.ajustar_nomes_colunas(df_gabarito['nome_coluna'].unique().tolist())
-
-    features_acumuladas = []
-    labels_acumulados = []
-
-    print("Iniciando extração de características...")
-
-    # Itera sobre cada arquivo listado no gabarito
-    arquivos_unicos = df_gabarito['nome_arquivo'].unique()
-    
-    for arquivo in arquivos_unicos:
-        caminho_completo = os.path.join(caminho_dados, arquivo)
+class FeatureCreator:
+    def __init__(self):
+        self.feature_extractor = MetaFeatureExtractor()
+        self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
-        if not os.path.exists(caminho_completo):
-            print(f"Aviso: Arquivo {arquivo} não encontrado na pasta de bancos brutos.")
-            continue
+    def load_gabarito(self) -> pd.DataFrame:
+        gabarito_path = os.path.join(self.base_dir, 'dados_para_treinamento', 'gabarito_master.csv')
+        if not os.path.exists(gabarito_path):
+            raise FileNotFoundError(f"Arquivo gabarito não encontrado: {gabarito_path}")
+        return pd.read_csv(gabarito_path)
+        
+    def load_training_files(self) -> List[str]:
+        banco_bruto_path = os.path.join(self.base_dir, 'dados_para_treinamento', 'bancos_brutos')
+        if not os.path.exists(banco_bruto_path):
+            raise FileNotFoundError(f"Diretório banco_bruto não encontrado: {banco_bruto_path}")
             
+        csv_files = [f for f in os.listdir(banco_bruto_path) if f.endswith('.csv')]
+        if not csv_files:
+            raise FileNotFoundError("Nenhum arquivo CSV encontrado no diretório banco_bruto")
+            
+        return [os.path.join(banco_bruto_path, f) for f in csv_files]
+        
+    def detect_separator(self, file_path: str) -> str:
         try:
-            # Carrega o CSV usando nosso carregador inteligente
-            df_atual, _, _ = carregador.carregar_dados(caminho_completo)
-            
-            # Filtra o gabarito apenas para as colunas deste arquivo
-            gabarito_arquivo = df_gabarito[df_gabarito['nome_arquivo'] == arquivo]
-            
-            # Para cada coluna documentada no gabarito, extraímos as features
-            for _, linha in gabarito_arquivo.iterrows():
-                coluna = linha['nome_coluna']
-                tipo_real = linha['tipo_semantico']
+            with open(file_path, 'r', encoding='utf-8') as f:
+                first_line = f.readline()
                 
-                if coluna in df_atual.columns:
-                    # A MÁGICA ACONTECE AQUI:
-                    # Transformamos a coluna crua em um dicionário de números (ex: {'numeric_ratio': 0.9, ...})
-                    features = extrator.extrair_caracteristicas(df_atual[coluna], coluna)
-                    features_acumuladas.append(features)
-                    labels_acumulados.append(tipo_real)
+            if first_line.count(';') > first_line.count(','):
+                return ';'
+            else:
+                return ','
+        except Exception:
+            return ','
+            
+    def create_features_dataset(self) -> pd.DataFrame:
+        gabarito_df = self.load_gabarito()
+        training_files = self.load_training_files()
         
-        except Exception as e:
-            print(f"Erro ao processar {arquivo}: {e}")
-
-    # Cria um DataFrame final com todas as features de todas as colunas de todos os arquivos
-    df_features = pd.DataFrame(features_acumuladas)
-    df_features['target_label'] = labels_acumulados # Adiciona a resposta correta
-
-    # Salva o resultado para ser usado no passo 2
-    df_features.to_csv(caminho_saida, index=False)
-    print(f"Sucesso! Features extraídas de {len(features_acumuladas)} colunas e salvas em: {caminho_saida}")
+        all_features = []
+        all_column_names = []
+        
+        for file_path in training_files:
+            filename = os.path.basename(file_path)
+            try:
+                separator = self.detect_separator(file_path)
+                df = pd.read_csv(file_path, sep=separator, encoding='utf-8', low_memory=False)
+                
+                for column in df.columns:
+                    all_column_names.append(column)
+                    
+            except Exception as e:
+                warnings.warn(f"Erro ao ler arquivo {filename}: {e}")
+                continue
+                
+        self.feature_extractor.fit_column_names(all_column_names)
+        
+        for file_path in training_files:
+            filename = os.path.basename(file_path)
+            try:
+                separator = self.detect_separator(file_path)
+                df = pd.read_csv(file_path, sep=separator, encoding='utf-8', low_memory=False)
+                
+                for column in df.columns:
+                    gabarito_row = gabarito_df[
+                        (gabarito_df['nome_arquivo'] == filename) & 
+                        (gabarito_df['nome_coluna'] == column)
+                    ]
+                    
+                    if not gabarito_row.empty:
+                        tipo_real = gabarito_row['tipo_real'].iloc[0]
+                        
+                        features = self.feature_extractor.extract_features(df[column], column)
+                        features['target'] = tipo_real
+                        features['nome_arquivo'] = filename
+                        features['nome_coluna'] = column
+                        
+                        all_features.append(features)
+                        
+            except Exception as e:
+                warnings.warn(f"Erro ao processar arquivo {filename}: {e}")
+                continue
+                
+        if not all_features:
+            raise ValueError("Nenhuma feature foi extraída. Verifique o gabarito e os arquivos de treino.")
+            
+        features_df = pd.DataFrame(all_features)
+        return features_df
+        
+    def save_features(self, features_df: pd.DataFrame):
+        output_path = os.path.join(self.base_dir, 'dados_para_treinamento', 'training_features.csv')
+        features_df.to_csv(output_path, index=False)
+        print(f"Dataset de features salvo em: {output_path}")
+        print(f"Shape do dataset: {features_df.shape}")
+        print(f"Distribuição de classes:\n{features_df['target'].value_counts()}")
 
 if __name__ == "__main__":
-    gerar_features_treinamento()
+    try:
+        creator = FeatureCreator()
+        features_df = creator.create_features_dataset()
+        creator.save_features(features_df)
+    except Exception as e:
+        print(f"Erro durante a criação de features: {e}")
+        sys.exit(1)
